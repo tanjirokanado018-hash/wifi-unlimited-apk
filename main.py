@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# WiFi Unlimited Tool - Kivy App
+# WiFi Unlimited Tool – Kivy App (requests-only, no aiohttp)
 # Developed by LaMinPaing
 
 import os
-import re
-import sys
 import time
-import base64
-import urllib.parse
-import hashlib
-import asyncio
 import threading
-from functools import partial
 
-# --- Kivy imports ---
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 from kivy.uix.boxlayout import BoxLayout
@@ -23,60 +15,52 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.uix.image import Image
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, RoundedRectangle, Rectangle, Ellipse, Line
 from kivy.clock import Clock
 from kivy.metrics import dp, sp
-from kivy.properties import StringProperty, BooleanProperty, NumericProperty
 from kivy.animation import Animation
 from kivy.core.window import Window
-from kivy.uix.progressbar import ProgressBar
 
 
 # ─── Colour Palette ────────────────────────────────────────────────────────────
-BG        = (0.05, 0.07, 0.12, 1)       # deep navy
-CARD      = (0.08, 0.11, 0.18, 1)       # card bg
-CARD2     = (0.10, 0.14, 0.22, 1)
-ACCENT    = (0.18, 0.62, 1.00, 1)       # electric blue
-ACCENT2   = (0.10, 0.45, 0.85, 1)
-SUCCESS   = (0.18, 0.85, 0.55, 1)       # green
-DANGER    = (1.00, 0.35, 0.35, 1)       # red
-WARN      = (1.00, 0.78, 0.20, 1)       # yellow
-TEXT      = (0.90, 0.93, 1.00, 1)       # near-white
-SUBTEXT   = (0.50, 0.58, 0.72, 1)
-BORDER    = (0.18, 0.26, 0.42, 1)
+BG      = (0.05, 0.07, 0.12, 1)
+CARD    = (0.08, 0.11, 0.18, 1)
+CARD2   = (0.10, 0.14, 0.22, 1)
+ACCENT  = (0.18, 0.62, 1.00, 1)
+SUCCESS = (0.18, 0.85, 0.55, 1)
+DANGER  = (1.00, 0.35, 0.35, 1)
+WARN    = (1.00, 0.78, 0.20, 1)
+TEXT    = (0.90, 0.93, 1.00, 1)
+SUBTEXT = (0.50, 0.58, 0.72, 1)
+BORDER  = (0.18, 0.26, 0.42, 1)
 
 
-# ─── Rounded Card Widget ───────────────────────────────────────────────────────
+# ─── Helpers ───────────────────────────────────────────────────────────────────
 class Card(BoxLayout):
-    def __init__(self, radius=18, bg_color=None, **kwargs):
-        super().__init__(**kwargs)
-        self._radius = radius
+    def __init__(self, radius=18, bg_color=None, **kw):
+        super().__init__(**kw)
+        self._r  = radius
         self._bg = bg_color or CARD
-        self.bind(pos=self._redraw, size=self._redraw)
+        self.bind(pos=self._draw, size=self._draw)
 
-    def _redraw(self, *_):
+    def _draw(self, *_):
         self.canvas.before.clear()
         with self.canvas.before:
             Color(*self._bg)
-            RoundedRectangle(pos=self.pos, size=self.size,
-                             radius=[self._radius])
+            RoundedRectangle(pos=self.pos, size=self.size, radius=[self._r])
 
 
-# ─── Pulse Dot (status indicator) ─────────────────────────────────────────────
 class PulseDot(Widget):
-    color = (0.18, 0.62, 1.00, 1)
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._alpha = 1.0
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.color = list(SUBTEXT)
         self.size_hint = (None, None)
-        self.size = (dp(14), dp(14))
+        self.size = (dp(12), dp(12))
+        self._alpha = 1.0
+        self._dir   = -1
         self.bind(pos=self._draw, size=self._draw)
         Clock.schedule_interval(self._pulse, 0.03)
-        self._dir = -1
-        self._alpha = 1.0
 
     def _draw(self, *_):
         self.canvas.clear()
@@ -86,424 +70,330 @@ class PulseDot(Widget):
 
     def _pulse(self, dt):
         self._alpha += self._dir * 0.025
-        if self._alpha <= 0.25:
+        if self._alpha <= 0.3:
             self._dir = 1
         elif self._alpha >= 1.0:
             self._dir = -1
         self._draw()
 
 
-# ─── WiFi Signal Icon (drawn with canvas) ─────────────────────────────────────
 class WiFiIcon(Widget):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._active_bars = 0
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._bars = 0
         self.size_hint = (None, None)
-        self.size = (dp(72), dp(56))
+        self.size = (dp(60), dp(48))
         self.bind(pos=self._draw, size=self._draw)
 
     def set_bars(self, n):
-        self._active_bars = n
+        self._bars = n
         self._draw()
 
     def _draw(self, *_):
         self.canvas.clear()
         cx = self.x + self.width / 2
-        by = self.y + dp(4)
-        arcs = [
-            (dp(10), dp(10), dp(20), 0.15, 0.85),
-            (dp(20), dp(14), dp(26), 0.15, 0.85),
-            (dp(32), dp(18), dp(32), 0.15, 0.85),
-        ]
+        by = self.y + dp(2)
         with self.canvas:
-            # dot
-            Color(*ACCENT) if self._active_bars > 0 else Color(*SUBTEXT)
-            Ellipse(pos=(cx - dp(5), by), size=(dp(10), dp(10)))
-            # arcs approximated as ellipse segments
-            for i, (w, h, radius, a0, a1) in enumerate(arcs):
-                active = i < self._active_bars
-                Color(*ACCENT if active else SUBTEXT)
-                Line(ellipse=(cx - w/2, by, w, h), width=dp(2.5))
+            Color(*ACCENT if self._bars > 0 else SUBTEXT)
+            Ellipse(pos=(cx - dp(4), by), size=(dp(8), dp(8)))
+            for i, (w, h) in enumerate([(dp(18), dp(12)),
+                                        (dp(30), dp(20)),
+                                        (dp(42), dp(28))]):
+                Color(*ACCENT if i < self._bars else SUBTEXT)
+                Line(ellipse=(cx - w/2, by, w, h), width=dp(2.2))
 
 
-# ─── Animated Connect Button ───────────────────────────────────────────────────
 class GlowButton(Button):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, **kw):
+        super().__init__(**kw)
         self.background_normal = ''
-        self.background_color = (0, 0, 0, 0)
-        self.color = (1, 1, 1, 1)
-        self.font_size = sp(17)
-        self.bold = True
+        self.background_color  = (0, 0, 0, 0)
+        self.color             = (1, 1, 1, 1)
+        self.font_size         = sp(16)
+        self.bold              = True
         self.bind(pos=self._draw, size=self._draw)
 
     def _draw(self, *_):
         self.canvas.before.clear()
         with self.canvas.before:
-            Color(*ACCENT)
-            RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(14)])
+            Color(*(SUBTEXT if self.disabled else ACCENT))
+            RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(13)])
 
     def on_press(self):
-        anim = Animation(opacity=0.6, duration=0.08) + Animation(opacity=1, duration=0.08)
-        anim.start(self)
+        Animation(opacity=0.5, duration=0.07).start(self)
+        Animation(opacity=0.5, duration=0.07).start(self)
 
-    def set_disabled_look(self, disabled):
-        if disabled:
-            with self.canvas.before:
-                Color(*SUBTEXT)
-                RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(14)])
-        else:
-            self._draw()
+    def on_release(self):
+        Animation(opacity=1, duration=0.07).start(self)
 
 
-# ─── Log Console ───────────────────────────────────────────────────────────────
 class LogConsole(ScrollView):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, **kw):
+        super().__init__(**kw)
         self.do_scroll_x = False
-        self._log_label = Label(
+        self._lbl = Label(
             text='',
             markup=True,
             size_hint_y=None,
             valign='top',
             halign='left',
-            font_size=sp(12.5),
+            font_size=sp(12),
             color=TEXT,
-            padding=(dp(12), dp(8)),
+            padding=(dp(10), dp(6)),
         )
-        self._log_label.bind(texture_size=self._on_texture)
-        self.add_widget(self._log_label)
+        self._lbl.bind(texture_size=self._on_tex)
+        self.add_widget(self._lbl)
 
-    def _on_texture(self, lbl, texture_size):
-        lbl.height = texture_size[1]
-        lbl.text_size = (lbl.width, None)
+    def _on_tex(self, lbl, ts):
+        lbl.height     = ts[1]
+        lbl.text_size  = (lbl.width, None)
 
-    def append(self, msg, color='#E6EAff'):
-        ts = time.strftime('%H:%M:%S')
-        line = f'[color={color}][b]{ts}[/b]  {msg}[/color]\n'
-        self._log_label.text += line
-        Clock.schedule_once(lambda *_: self.scroll_to(self._log_label), 0.05)
+    def append(self, msg, color='#C8D8FF'):
+        ts   = time.strftime('%H:%M:%S')
+        self._lbl.text += f'[color={color}][b]{ts}[/b]  {msg}[/color]\n'
+        Clock.schedule_once(lambda *_: self.scroll_to(self._lbl), 0.05)
 
-    def clear(self):
-        self._log_label.text = ''
+    def clear_log(self):
+        self._lbl.text = ''
 
 
 # ─── Home Screen ───────────────────────────────────────────────────────────────
 class HomeScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._running = False
-        self._build_ui()
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._busy = False
+        self._ip   = None
+        self._url  = None
+        self._build()
 
-    def _build_ui(self):
+    def _build(self):
         root = FloatLayout()
-
-        # Background
         with root.canvas.before:
             Color(*BG)
-            self._bg_rect = Rectangle(pos=root.pos, size=root.size)
-        root.bind(pos=self._upd_bg, size=self._upd_bg)
+            self._bg = Rectangle(pos=root.pos, size=root.size)
+        root.bind(pos=lambda w, *_: setattr(self._bg, 'pos', w.pos),
+                  size=lambda w, *_: setattr(self._bg, 'size', w.size))
 
-        # Main vertical layout
-        main = BoxLayout(
-            orientation='vertical',
-            padding=(dp(20), dp(36), dp(20), dp(16)),
-            spacing=dp(14),
-            size_hint=(1, 1),
-        )
+        main = BoxLayout(orientation='vertical',
+                         padding=(dp(18), dp(32), dp(18), dp(12)),
+                         spacing=dp(12))
 
-        # ── Header ──
-        header = BoxLayout(
-            orientation='horizontal',
-            size_hint_y=None, height=dp(64),
-            spacing=dp(12),
-        )
-        self._wifi_icon = WiFiIcon()
-        header.add_widget(self._wifi_icon)
+        # ── Header ──────────────────────────────────────────────────────────
+        hdr = BoxLayout(size_hint_y=None, height=dp(60), spacing=dp(10))
 
-        title_col = BoxLayout(orientation='vertical', spacing=dp(2))
-        title_col.add_widget(Label(
-            text='[b]WiFi Unlimited[/b]',
-            markup=True,
-            font_size=sp(22),
-            color=TEXT,
-            halign='left',
-            valign='middle',
-            size_hint_y=0.6,
-        ))
-        title_col.add_widget(Label(
-            text='[color=#809BC8]Ruijie Portal Authenticator[/color]',
-            markup=True,
-            font_size=sp(12),
-            halign='left',
-            valign='top',
-            size_hint_y=0.4,
-        ))
-        header.add_widget(title_col)
+        self._icon = WiFiIcon()
+        hdr.add_widget(self._icon)
 
-        # Status pill
-        self._status_box = BoxLayout(
-            orientation='horizontal',
-            size_hint=(None, None),
-            size=(dp(110), dp(32)),
-            spacing=dp(6),
-            padding=(dp(10), 0),
-        )
-        with self._status_box.canvas.before:
+        titles = BoxLayout(orientation='vertical', spacing=dp(1))
+        titles.add_widget(Label(text='[b]WiFi Unlimited[/b]', markup=True,
+                                font_size=sp(21), color=TEXT,
+                                halign='left', valign='middle', size_hint_y=0.6))
+        titles.add_widget(Label(
+            text='[color=#6080A8]Ruijie Portal Authenticator[/color]',
+            markup=True, font_size=sp(11.5),
+            halign='left', valign='top', size_hint_y=0.4))
+        hdr.add_widget(titles)
+
+        pill = BoxLayout(orientation='horizontal',
+                         size_hint=(None, None), size=(dp(100), dp(28)),
+                         spacing=dp(5), padding=(dp(8), 0))
+        with pill.canvas.before:
             Color(*CARD2)
-            RoundedRectangle(pos=self._status_box.pos, size=self._status_box.size, radius=[dp(16)])
-        self._status_box.bind(pos=self._upd_status_pill, size=self._upd_status_pill)
+            self._pill_bg = RoundedRectangle(pos=pill.pos, size=pill.size,
+                                             radius=[dp(14)])
+        pill.bind(pos=self._upd_pill, size=self._upd_pill)
 
-        self._pulse = PulseDot()
-        self._status_box.add_widget(self._pulse)
-        self._status_lbl = Label(
-            text='Idle',
-            font_size=sp(12),
-            color=SUBTEXT,
-            halign='left',
-            valign='middle',
-        )
-        self._status_box.add_widget(self._status_lbl)
-        header.add_widget(self._status_box)
+        self._dot = PulseDot()
+        pill.add_widget(self._dot)
+        self._status_lbl = Label(text='Idle', font_size=sp(11.5),
+                                 color=list(SUBTEXT), halign='left', valign='middle')
+        pill.add_widget(self._status_lbl)
+        hdr.add_widget(pill)
+        main.add_widget(hdr)
 
-        main.add_widget(header)
+        # ── Voucher Card ────────────────────────────────────────────────────
+        vc = Card(orientation='vertical', padding=dp(16), spacing=dp(10),
+                  size_hint_y=None, height=dp(118))
+        vc.add_widget(Label(text='[b]Voucher Code[/b]', markup=True,
+                            font_size=sp(12.5), color=list(SUBTEXT),
+                            halign='left', size_hint_y=None, height=dp(20)))
 
-        # ── Voucher Card ──
-        voucher_card = Card(
-            orientation='vertical',
-            padding=dp(18),
-            spacing=dp(12),
-            size_hint_y=None, height=dp(130),
-        )
-        voucher_card.add_widget(Label(
-            text='[b]Voucher Code[/b]',
-            markup=True,
-            font_size=sp(13),
-            color=SUBTEXT,
-            halign='left',
-            size_hint_y=None, height=dp(22),
-        ))
-
-        ti_wrap = BoxLayout(
-            size_hint_y=None, height=dp(52),
-            spacing=0,
-        )
+        ti_wrap = BoxLayout(size_hint_y=None, height=dp(50))
         with ti_wrap.canvas.before:
             Color(*BORDER)
-            self._ti_border = RoundedRectangle(pos=ti_wrap.pos, size=ti_wrap.size, radius=[dp(12)])
-        ti_wrap.bind(pos=self._upd_ti, size=self._upd_ti)
-
-        self._voucher_input = TextInput(
+            self._ti_bg = RoundedRectangle(pos=ti_wrap.pos, size=ti_wrap.size,
+                                           radius=[dp(11)])
+        ti_wrap.bind(pos=lambda w, *_: setattr(self._ti_bg, 'pos', w.pos),
+                     size=lambda w, *_: setattr(self._ti_bg, 'size', w.size))
+        self._voucher = TextInput(
             hint_text='  Enter voucher code…',
-            font_size=sp(18),
+            font_size=sp(17),
             background_color=(0, 0, 0, 0),
-            foreground_color=TEXT,
+            foreground_color=list(TEXT),
             hint_text_color=list(SUBTEXT),
             cursor_color=list(ACCENT),
             multiline=False,
-            padding=(dp(14), dp(12)),
+            padding=(dp(12), dp(10)),
         )
-        ti_wrap.add_widget(self._voucher_input)
-        voucher_card.add_widget(ti_wrap)
-        voucher_card.add_widget(Label(
-            text='[color=#809BC8]Input the Ruijie portal voucher code[/color]',
-            markup=True,
-            font_size=sp(11),
-            halign='left',
-            size_hint_y=None, height=dp(18),
-        ))
-        main.add_widget(voucher_card)
+        ti_wrap.add_widget(self._voucher)
+        vc.add_widget(ti_wrap)
+        vc.add_widget(Label(
+            text='[color=#607898]Input your Ruijie portal voucher code[/color]',
+            markup=True, font_size=sp(10.5), halign='left',
+            size_hint_y=None, height=dp(16)))
+        main.add_widget(vc)
 
-        # ── Action Buttons ──
-        btn_row = BoxLayout(
-            orientation='horizontal',
-            size_hint_y=None, height=dp(54),
-            spacing=dp(12),
-        )
-        self._setup_btn = GlowButton(text='⚙  Setup')
-        self._setup_btn.bind(on_press=self._on_setup)
-        btn_row.add_widget(self._setup_btn)
-
+        # ── Buttons ─────────────────────────────────────────────────────────
+        btns = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
+        self._setup_btn   = GlowButton(text='⚙  Setup')
         self._connect_btn = GlowButton(text='⚡  Connect')
+        self._setup_btn.bind(on_press=self._on_setup)
         self._connect_btn.bind(on_press=self._on_connect)
-        btn_row.add_widget(self._connect_btn)
-        main.add_widget(btn_row)
+        btns.add_widget(self._setup_btn)
+        btns.add_widget(self._connect_btn)
+        main.add_widget(btns)
 
-        self._clear_btn = Button(
-            text='Clear Log',
-            font_size=sp(13),
-            background_color=(0, 0, 0, 0),
-            color=list(SUBTEXT),
-            size_hint_y=None, height=dp(32),
-        )
-        self._clear_btn.bind(on_press=lambda *_: self._console.clear())
-        main.add_widget(self._clear_btn)
+        clr = Button(text='Clear Log', font_size=sp(12),
+                     background_color=(0, 0, 0, 0), color=list(SUBTEXT),
+                     size_hint_y=None, height=dp(28))
+        clr.bind(on_press=lambda *_: self._console.clear_log())
+        main.add_widget(clr)
 
-        # ── Console ──
-        console_card = Card(
-            radius=14,
-            bg_color=CARD2,
-            orientation='vertical',
-            padding=dp(4),
-        )
+        # ── Console ─────────────────────────────────────────────────────────
+        cc = Card(radius=12, bg_color=CARD2, orientation='vertical', padding=dp(2))
         self._console = LogConsole()
-        console_card.add_widget(self._console)
-        main.add_widget(console_card)
+        cc.add_widget(self._console)
+        main.add_widget(cc)
 
-        # ── Footer ──
+        # ── Footer ──────────────────────────────────────────────────────────
         main.add_widget(Label(
-            text='[color=#3A5080]Developed by  [/color][b][color=#3A72CC]LaMinPaing[/color][/b]',
-            markup=True,
-            font_size=sp(11),
-            halign='center',
-            size_hint_y=None, height=dp(24),
-        ))
+            text='[color=#2A4070]Developed by  [/color][b][color=#3A72CC]LaMinPaing[/color][/b]',
+            markup=True, font_size=sp(11), halign='center',
+            size_hint_y=None, height=dp(22)))
 
         root.add_widget(main)
         self.add_widget(root)
+        self._console.append('Ready. Tap [b]Setup[/b] first, then [b]Connect[/b].', '#809BC8')
 
-        self._console.append('Ready. Press [b]Setup[/b] first, then [b]Connect[/b].', '#809BC8')
-
-    # ── canvas helpers ──
-    def _upd_bg(self, w, *_):
-        self._bg_rect.pos = w.pos
-        self._bg_rect.size = w.size
-
-    def _upd_status_pill(self, w, *_):
+    def _upd_pill(self, w, *_):
         w.canvas.before.clear()
         with w.canvas.before:
             Color(*CARD2)
-            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(16)])
+            RoundedRectangle(pos=w.pos, size=w.size, radius=[dp(14)])
 
-    def _upd_ti(self, w, *_):
-        self._ti_border.pos = w.pos
-        self._ti_border.size = w.size
-
-    # ── public helpers ──
+    # ── Helpers ─────────────────────────────────────────────────────────────
     def log(self, msg, level='info'):
-        color_map = {
-            'info':    '#C8D8FF',
-            'success': '#35D98C',
-            'warn':    '#F5C842',
-            'error':   '#FF6060',
-        }
-        Clock.schedule_once(lambda *_: self._console.append(msg, color_map.get(level, '#C8D8FF')))
+        clr = {'info': '#C8D8FF', 'success': '#35D98C',
+                'warn': '#F5C842',  'error':   '#FF6060'}.get(level, '#C8D8FF')
+        Clock.schedule_once(lambda *_: self._console.append(msg, clr))
 
-    def set_status(self, text, color=None):
-        def _upd(*_):
-            self._status_lbl.text = text
-            self._pulse.color = color or SUBTEXT
-        Clock.schedule_once(_upd)
+    def _set_status(self, text, color):
+        def _u(*_):
+            self._status_lbl.text  = text
+            self._dot.color        = list(color)
+        Clock.schedule_once(_u)
 
-    def set_wifi_bars(self, n):
-        Clock.schedule_once(lambda *_: self._wifi_icon.set_bars(n))
+    def _set_busy(self, busy):
+        def _u(*_):
+            for btn in (self._setup_btn, self._connect_btn):
+                btn.disabled = busy
+                btn.opacity  = 0.45 if busy else 1
+                btn._draw()
+        Clock.schedule_once(_u)
 
-    def set_busy(self, busy):
-        def _upd(*_):
-            self._setup_btn.disabled = busy
-            self._connect_btn.disabled = busy
-            self._setup_btn.opacity = 0.5 if busy else 1
-            self._connect_btn.opacity = 0.5 if busy else 1
-        Clock.schedule_once(_upd)
-
-    # ── button handlers ──
+    # ── Button handlers ──────────────────────────────────────────────────────
     def _on_setup(self, *_):
-        if self._running:
+        if self._busy:
             return
-        self._running = True
-        self.set_busy(True)
-        self.set_status('Setting up…', WARN)
-        self.set_wifi_bars(1)
-        self.log('Starting Ruijie WiFi setup…', 'info')
+        self._busy = True
+        self._set_busy(True)
+        self._set_status('Setting up…', WARN)
+        Clock.schedule_once(lambda *_: self._icon.set_bars(1))
+        self.log('Starting Ruijie WiFi setup…')
         threading.Thread(target=self._run_setup, daemon=True).start()
 
     def _on_connect(self, *_):
-        if self._running:
+        if self._busy:
             return
-        voucher = self._voucher_input.text.strip()
+        voucher = self._voucher.text.strip()
         if not voucher:
             self.log('Please enter a voucher code first!', 'warn')
             return
-        ip = getattr(self, '_ip', None)
-        session_url = getattr(self, '_session_url', None)
-        if not ip or not session_url:
+        if not self._ip or not self._url:
             self.log('Run Setup first to get gateway info.', 'warn')
             return
-        self._running = True
-        self.set_busy(True)
-        self.set_status('Connecting…', ACCENT)
-        self.set_wifi_bars(2)
-        self.log(f'Connecting with voucher: [b]{voucher}[/b]', 'info')
-        threading.Thread(
-            target=self._run_connect,
-            args=(voucher, ip, session_url),
-            daemon=True,
-        ).start()
+        self._busy = True
+        self._set_busy(True)
+        self._set_status('Connecting…', ACCENT)
+        Clock.schedule_once(lambda *_: self._icon.set_bars(2))
+        self.log(f'Connecting with voucher: [b]{voucher}[/b]')
+        threading.Thread(target=self._run_connect,
+                         args=(voucher, self._ip, self._url),
+                         daemon=True).start()
 
-    # ── background workers ──
+    # ── Background workers ───────────────────────────────────────────────────
     def _run_setup(self):
         try:
             from wifi_core import WifiSetup
-            setup = WifiSetup(log_cb=self.log)
-            ip, session_url = setup.run_full_setup()
-            if ip and session_url:
-                self._ip = ip
-                self._session_url = session_url
+            ip, url = WifiSetup(log_cb=self.log).run_full_setup()
+            if ip and url:
+                self._ip  = ip
+                self._url = url
                 self.log(f'Gateway IP: [b]{ip}[/b]', 'success')
                 self.log('Session URL obtained ✓', 'success')
-                self.set_status('Ready', SUCCESS)
-                self.set_wifi_bars(3)
+                self._set_status('Ready', SUCCESS)
+                Clock.schedule_once(lambda *_: self._icon.set_bars(3))
             else:
-                self.log('Setup failed. Check network connection.', 'error')
-                self.set_status('Failed', DANGER)
-                self.set_wifi_bars(0)
+                self.log('Setup failed. Make sure you are on Ruijie WiFi.', 'error')
+                self._set_status('Failed', DANGER)
+                Clock.schedule_once(lambda *_: self._icon.set_bars(0))
         except Exception as e:
             self.log(f'Setup error: {e}', 'error')
-            self.set_status('Error', DANGER)
+            self._set_status('Error', DANGER)
         finally:
-            self._running = False
-            self.set_busy(False)
+            self._busy = False
+            self._set_busy(False)
 
     def _run_connect(self, voucher, ip, session_url):
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self._async_connect(voucher, ip, session_url))
+            from wifi_core import get_session_id, login_voucher, auth_gateway
+
+            self.log('Fetching session ID…')
+            sid = get_session_id(session_url, self.log)
+            if not sid:
+                self.log('Failed to get session ID.', 'error')
+                self._set_status('Failed', DANGER)
+                return
+            self.log(f'Session ID: [b]{sid[:16]}…[/b]')
+
+            self.log('Logging in with voucher…')
+            token = login_voucher(sid, voucher, self.log)
+            if not token:
+                self.log('Voucher rejected or expired.', 'error')
+                self._set_status('Auth Failed', DANGER)
+                Clock.schedule_once(lambda *_: self._icon.set_bars(1))
+                return
+
+            self.log('Voucher accepted ✓', 'success')
+            Clock.schedule_once(lambda *_: self._icon.set_bars(3))
+            ok = auth_gateway(voucher, ip, token, session_url, self.log)
+            if ok:
+                self._set_status('Connected!', SUCCESS)
+            else:
+                self._set_status('Auth Failed', DANGER)
         except Exception as e:
             self.log(f'Connection error: {e}', 'error')
-            self.set_status('Error', DANGER)
+            self._set_status('Error', DANGER)
         finally:
-            self._running = False
-            self.set_busy(False)
-
-    async def _async_connect(self, voucher, ip, session_url):
-        import aiohttp
-        from wifi_core import (
-            get_session_id, login_voucher, auth_gateway
-        )
-        async with aiohttp.ClientSession() as session:
-            self.log('Fetching session ID…', 'info')
-            session_id = await get_session_id(session, session_url, self.log)
-            self.log(f'Session ID: [b]{session_id[:16]}…[/b]', 'info')
-
-            self.log('Logging in with voucher…', 'info')
-            token = await login_voucher(session, session_id, voucher, self.log)
-            if token:
-                self.log('Voucher accepted ✓', 'success')
-                self.set_wifi_bars(3)
-                await auth_gateway(session, voucher, ip, token, session_url, self.log)
-                self.set_status('Connected!', SUCCESS)
-            else:
-                self.log('Failed to get token. Check voucher code.', 'error')
-                self.set_status('Auth Failed', DANGER)
-                self.set_wifi_bars(1)
+            self._busy = False
+            self._set_busy(False)
 
 
 # ─── App ───────────────────────────────────────────────────────────────────────
 class WiFiApp(App):
     def build(self):
         Window.clearcolor = BG
-        sm = ScreenManager(transition=FadeTransition(duration=0.25))
+        sm = ScreenManager(transition=FadeTransition(duration=0.2))
         sm.add_widget(HomeScreen(name='home'))
         return sm
 

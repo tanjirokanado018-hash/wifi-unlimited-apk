@@ -9,7 +9,8 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 
 version = 1.0.0
 
-requirements = python3,kivy==2.3.0,requests,aiohttp,pycryptodome,certifi,urllib3,charset-normalizer,idna,multidict,yarl,aiosignal,frozenlist,async-timeout
+# No C extensions – pure Python only (no aiohttp)
+requirements = python3,kivy==2.3.0,requests,pycryptodome,certifi,urllib3,charset-normalizer,idna
 
 orientation = portrait
 fullscreen = 0
@@ -27,7 +28,6 @@ android.archs = arm64-v8a, armeabi-v7a
 
 android.allow_backup = True
 android.accept_sdk_license = True
-android.skip_update = False
 
 p4a.bootstrap = sdl2
 
