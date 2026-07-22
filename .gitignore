@@ -1,0 +1,8 @@
+.buildozer/
+bin/
+*.pyc
+__pycache__/
+.session_url
+.ip
+temp_captcha.png
+build.log
