@@ -9,7 +9,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 
 version = 1.0.0
 
-requirements = python3==3.11.14,kivy==2.3.0,requests,aiohttp,pycryptodome,certifi,urllib3,charset-normalizer,idna,multidict,yarl,aiosignal,frozenlist,async-timeout
+requirements = python3,kivy==2.3.0,requests,aiohttp,pycryptodome,certifi,urllib3,charset-normalizer,idna,multidict,yarl,aiosignal,frozenlist,async-timeout
 
 orientation = portrait
 fullscreen = 0
